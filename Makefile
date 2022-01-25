@@ -5,8 +5,14 @@ STANDARD_CC_FLAGS := \
 	-Wcast-align \
 	-Wstrict-prototypes \
 	-Wformat-truncation=0
-SRC_FILES := $(wildcard ./*.c)
-INCLUDES := -I .
+SRC_FILES := $(wildcard ./*.c) \
+			 $(wildcard ./libtomcrypt/src/stream/chacha/*.c) \
+			 $(wildcard ./libtomcrypt/src/encauth/chachapoly/*.c) \
+			 $(wildcard ./libtomcrypt/src/mac/poly1305/*.c) \
+			 ./libtomcrypt/src/misc/crypt/crypt_argchk.c \
+			 ./libtomcrypt/src/misc/mem_neq.c \
+			 ./libtomcrypt/src/misc/zeromem.c
+INCLUDES := -I . -I libtomcrypt/src/headers
 BUILD_DIR := $(CURDIR)/build
 EXE_FILE := pwm
 
