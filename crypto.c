@@ -6,7 +6,19 @@
 #include "pwm.h"
 #include "crypto.h"
 
+#include "argon2.h"
 #include "tomcrypt.h"
+#include "hex.h"
+
+
+/*--------------------------------------------------------------------------------------------------
+*
+* Argon2 parameters.
+*
+*-------------------------------------------------------------------------------------------------*/
+#define MEM_COST                8192        ///< kibibytes.
+#define TIME_COST               100         ///< Rounds
+#define NUM_THREADS             4
 
 
 /*--------------------------------------------------------------------------------------------------
@@ -82,4 +94,96 @@ bool Decrypt
                                    ptPtr,
                                    (uint8_t*)tagPtr, &tagLen,
                                    CHACHA20POLY1305_DECRYPT) == CRYPT_OK;
+}
+
+
+/*--------------------------------------------------------------------------------------------------
+*
+* Derive a key.
+*
+* @return
+*       true if successful.
+*       false otherwise.
+*
+*-------------------------------------------------------------------------------------------------*/
+bool DeriveKey
+(
+    const char *secretPtr,              ///< [IN] Secret to use.
+    const uint8_t *saltPtr,             ///< [IN] Random salt.
+    size_t saltSize,                    ///< [IN] Size of the salt.
+    const char *labelPtr,               ///< [IN] Label.
+    uint8_t *keyPtr,                    ///< [OUT] Key.
+    size_t keySize                      ///< [IN] Size of key.
+)
+{
+    argon2_context context;
+    context.out = keyPtr;
+    context.outlen = keySize;
+    context.pwd = (uint8_t *)secretPtr;
+    context.pwdlen = (uint32_t)strlen(secretPtr);
+    context.salt = (uint8_t *)saltPtr;
+    context.saltlen = (uint32_t)saltSize;
+    context.secret = NULL;
+    context.secretlen = 0;
+    context.ad = (uint8_t *)labelPtr;
+    context.adlen = (uint32_t)strlen(labelPtr);
+    context.t_cost = TIME_COST;
+    context.m_cost = MEM_COST;
+    context.lanes = NUM_THREADS;
+    context.threads = NUM_THREADS;
+    context.allocate_cbk = NULL;
+    context.free_cbk = NULL;
+    context.flags = ARGON2_DEFAULT_FLAGS;
+    context.version = ARGON2_VERSION_NUMBER;
+
+    int ret = argon2_ctx(&context, Argon2_id);
+
+    if (ret != ARGON2_OK)
+    {
+        return false;
+    }
+
+    return true;
+}
+
+
+/*--------------------------------------------------------------------------------------------------
+*
+* Derive a name (string) from a secret string, salt and a label.  The name will always be NULL
+* terminated and will be as close to the maximum name size as possible.
+*
+* @return
+*       true if successful.
+*       false otherwise.
+*
+*-------------------------------------------------------------------------------------------------*/
+bool DeriveName
+(
+    const char *secretPtr,              ///< [IN] Secret to use.
+    const uint8_t *saltPtr,             ///< [IN] Random salt.
+    size_t saltSize,                    ///< [IN] Size of the salt.
+    const char *labelPtr,               ///< [IN] Label.
+    char *namePtr,                      ///< [OUT] Derived name.
+    size_t maxNameSize                  ///< [IN] Maximum name size.
+)
+{
+    size_t binNameSize = (maxNameSize / 2) - 1;
+    uint8_t *binNamePtr = malloc(binNameSize);
+
+    if (binNamePtr == NULL)
+    {
+        return false;
+    }
+
+    if (!DeriveKey(secretPtr, saltPtr, saltSize, labelPtr, binNamePtr, binNameSize))
+    {
+        return false;
+    }
+
+    if (BinToHexStr(binNamePtr, binNameSize, namePtr, maxNameSize) != binNameSize)
+    {
+        return false;
+    }
+
+    return true;
 }

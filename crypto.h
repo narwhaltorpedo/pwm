@@ -62,4 +62,45 @@ bool Decrypt
 );
 
 
+/*--------------------------------------------------------------------------------------------------
+*
+* Derive a key from a secret string and a salt.
+*
+* @return
+*       true if successful.
+*       false otherwise.
+*
+*-------------------------------------------------------------------------------------------------*/
+bool DeriveKey
+(
+    const char *secretPtr,              ///< [IN] Secret to use.
+    const uint8_t *saltPtr,             ///< [IN] Random salt.
+    size_t saltSize,                    ///< [IN] Size of the salt.
+    const char *labelPtr,               ///< [IN] Label.
+    uint8_t *keyPtr,                    ///< [OUT] Key.
+    size_t keySize                      ///< [IN] Size of key.
+);
+
+
+/*--------------------------------------------------------------------------------------------------
+*
+* Derive a name (string) from a secret string, salt and a label.  The name will always be NULL
+* terminated and will be as close to the maximum name size as possible.
+*
+* @return
+*       true if successful.
+*       false otherwise.
+*
+*-------------------------------------------------------------------------------------------------*/
+bool DeriveName
+(
+    const char *secretPtr,              ///< [IN] Secret to use.
+    const uint8_t *saltPtr,             ///< [IN] Random salt.
+    size_t saltSize,                    ///< [IN] Size of the salt.
+    const char *labelPtr,               ///< [IN] Label.
+    char *namePtr,                      ///< [OUT] Derived name.
+    size_t maxNameSize                  ///< [IN] Maximum name size.
+);
+
+
 #endif // PWM_CRYPTO_INCLUDE_GUARD
