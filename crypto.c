@@ -3,6 +3,8 @@
  *
  */
 
+#include <sys/random.h>
+
 #include "pwm.h"
 #include "crypto.h"
 
@@ -19,6 +21,22 @@
 #define MEM_COST                8192        ///< kibibytes.
 #define TIME_COST               100         ///< Rounds
 #define NUM_THREADS             4
+
+
+/*--------------------------------------------------------------------------------------------------
+*
+* Get a buffer of random numbers.
+*
+*-------------------------------------------------------------------------------------------------*/
+void GetRandom
+(
+    uint8_t *bufPtr,                    ///< [OUT] Buffer.
+    size_t bufSize                      ///< [IN] Buffer size.
+)
+{
+    INTERNAL_ERR_IF(getrandom(bufPtr, bufSize, GRND_NONBLOCK) != bufSize,
+                    "Could get random numbers.");
+}
 
 
 /*--------------------------------------------------------------------------------------------------
@@ -140,6 +158,7 @@ bool DeriveKey
 
     if (ret != ARGON2_OK)
     {
+        DEBUG("Argon2 failed %d", ret);
         return false;
     }
 
