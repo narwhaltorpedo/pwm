@@ -19,6 +19,7 @@
 #include <errno.h>
 #include <unistd.h>
 
+#include "utils.h"
 #include "print.h"
 
 #endif // PWM_INCLUDE_GUARD
