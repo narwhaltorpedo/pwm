@@ -10,6 +10,9 @@
 
 #define _GNU_SOURCE
 
+#include <termios.h>
+#include <sys/mman.h>
+#include <signal.h>
 #include <sys/stat.h>
 #include <fts.h>
 
@@ -144,6 +147,36 @@ static void PrintHelp
         Basename(utilNamePtr));
 
     exit(EXIT_FAILURE);
+}
+
+
+/*--------------------------------------------------------------------------------------------------
+*
+* Cleanup.
+*
+*-------------------------------------------------------------------------------------------------*/
+static void Cleanup
+(
+    void
+)
+{
+    ZerorizeSensitiveBufs();
+    TurnEchoOn(true);
+}
+
+
+/*--------------------------------------------------------------------------------------------------
+*
+* Cleanup secret/sensitive information.
+*
+*-------------------------------------------------------------------------------------------------*/
+static void CleanupSignalHandler
+(
+    int signal                          ///< [IN] Signal that occurred.
+)
+{
+    Cleanup();
+    _exit(EXIT_FAILURE);
 }
 
 
@@ -898,6 +931,45 @@ static void DeleteItem
 
 int main(int argc, char* argv[])
 {
+    // Prevent memory swaps for the entire program.
+    INTERNAL_ERR_IF(mlockall(MCL_CURRENT | MCL_FUTURE) != 0, "Could not lock memory.");
+
+    // Setup signal catcher to cleanup memory in case of unexpected termination.
+    struct sigaction sigAction = {0};
+    sigAction.sa_handler = CleanupSignalHandler;
+
+    INTERNAL_ERR_IF((sigaction(SIGABRT, &sigAction, NULL) != 0) ||
+                    (sigaction(SIGALRM, &sigAction, NULL) != 0) ||
+                    (sigaction(SIGBUS, &sigAction, NULL) != 0) ||
+                    (sigaction(SIGFPE, &sigAction, NULL) != 0) ||
+                    (sigaction(SIGHUP, &sigAction, NULL) != 0) ||
+                    (sigaction(SIGILL, &sigAction, NULL) != 0) ||
+                    (sigaction(SIGINT, &sigAction, NULL) != 0) ||
+                    (sigaction(SIGIO, &sigAction, NULL) != 0) ||
+                    (sigaction(SIGIOT, &sigAction, NULL) != 0) ||
+                    (sigaction(SIGPIPE, &sigAction, NULL) != 0) ||
+                    (sigaction(SIGPOLL, &sigAction, NULL) != 0) ||
+                    (sigaction(SIGPROF, &sigAction, NULL) != 0) ||
+                    (sigaction(SIGPWR, &sigAction, NULL) != 0) ||
+                    (sigaction(SIGQUIT, &sigAction, NULL) != 0) ||
+                    (sigaction(SIGSEGV, &sigAction, NULL) != 0) ||
+                    (sigaction(SIGSTKFLT, &sigAction, NULL) != 0) ||
+                    (sigaction(SIGSYS, &sigAction, NULL) != 0) ||
+                    (sigaction(SIGTERM, &sigAction, NULL) != 0) ||
+                    (sigaction(SIGTRAP, &sigAction, NULL) != 0) ||
+                    (sigaction(SIGUSR1, &sigAction, NULL) != 0) ||
+                    (sigaction(SIGUSR2, &sigAction, NULL) != 0) ||
+                    (sigaction(SIGVTALRM, &sigAction, NULL) != 0) ||
+                    (sigaction(SIGXCPU, &sigAction, NULL) != 0) ||
+                    (sigaction(SIGXFSZ, &sigAction, NULL) != 0),
+                    "Could not setup signal catcher.  %m.");
+
+    // Setup the termination action for a regular exit as well.
+    INTERNAL_ERR_IF(atexit(Cleanup) != 0, "Could not setup exit handler.");
+
+    // Ensure echo to the terminal is turned on.
+    TurnEchoOn(true);
+
     // Create the known paths.
     INTERNAL_ERR_IF(snprintf(StoragePath, sizeof(StoragePath),
                              "%s/%s", getenv("HOME"), STORAGE_DIR) >= sizeof(StoragePath),
