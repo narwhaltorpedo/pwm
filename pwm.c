@@ -8,6 +8,8 @@
  *
  */
 
+#define _GNU_SOURCE
+
 #include <sys/stat.h>
 #include <fts.h>
 
@@ -37,6 +39,18 @@
 
 /*--------------------------------------------------------------------------------------------------
 *
+* Size definitions.
+*
+*-------------------------------------------------------------------------------------------------*/
+#define MAX_ITEM_NAME_SIZE              100
+#define MAX_USERNAME_SIZE               100
+#define MAX_OTHER_INFO_SIZE             300
+#define ITEM_SIZE                       (MAX_ITEM_NAME_SIZE + MAX_USERNAME_SIZE + MAX_PASSWORD_SIZE + MAX_OTHER_INFO_SIZE)
+#define FILENAME_SIZE                   65
+
+
+/*--------------------------------------------------------------------------------------------------
+*
 * Known paths.
 *
 *-------------------------------------------------------------------------------------------------*/
@@ -51,6 +65,8 @@ static char TempPath[PATH_MAX];
 *
 *-------------------------------------------------------------------------------------------------*/
 #define DATA_ENC_KEYS                   "data"
+#define NAME_ENC_KEYS                   "names"
+#define FILE_LABEL                      "files"
 
 
 /*--------------------------------------------------------------------------------------------------
@@ -243,6 +259,336 @@ static void CheckMasterPwd
 
 /*--------------------------------------------------------------------------------------------------
 *
+* Get item path.
+*
+*-------------------------------------------------------------------------------------------------*/
+static void GetItemPath
+(
+    const char *itemNamePtr,            ///< [IN] Item name.
+    const char *masterPwdPtr,           ///< [IN] Master password.
+    const uint8_t *fileSaltPtr,         ///< [IN] Filename salt.
+    char *pathPtr                       ///< [OUT] Item path buffer.
+)
+{
+    // Build a label that concatenates the item name with the file label.
+    size_t labelSize = MAX_ITEM_NAME_SIZE + sizeof(FILE_LABEL);
+    char *labelPtr = GetSensitiveBuf(labelSize);
+
+    INTERNAL_ERR_IF(snprintf(labelPtr, labelSize, "%s%s", itemNamePtr, FILE_LABEL) >= labelSize,
+                    "Item name too long.");
+
+    // Derive the file name.
+    char *fileNamePtr = GetSensitiveBuf(FILENAME_SIZE);
+
+    INTERNAL_ERR_IF(!DeriveName(masterPwdPtr, fileSaltPtr, SALT_SIZE, labelPtr,
+                                fileNamePtr, FILENAME_SIZE),
+                    "Could not derive file name.");
+
+    // Check if the file exists.
+    INTERNAL_ERR_IF(snprintf(pathPtr, PATH_MAX, "%s/%s", StoragePath, fileNamePtr) >= PATH_MAX,
+                    "Path to storage location is too long.");
+
+    ReleaseSensitiveBuf(fileNamePtr);
+
+    PRINT("OK");
+}
+
+
+/*--------------------------------------------------------------------------------------------------
+*
+* Get a token from the str.  Tokens are separated by newlines.  The first invocation of this must
+* include the str value, subsequent invocations should be called with NULL in place of str.
+*
+*-------------------------------------------------------------------------------------------------*/
+static void GetToken
+(
+    const char *str,            ///< [IN] String to parse.
+    bool last,                  ///< [IN] true if this should be the last token in str.
+    char *bufPtr,               ///< [OUT] Buffer to hold token.
+    size_t bufSize              ///< [IN] Buffer size.
+)
+{
+    static const char *tokenPtr;
+
+    if (str != NULL)
+    {
+        tokenPtr = str;
+    }
+
+    char *sepPtr = strchrnul(tokenPtr, '\n');
+    CORRUPT_IF(last != (*sepPtr == '\0'), "Unexpected number of tokens.");
+
+    size_t tokenSize = sepPtr - tokenPtr;
+    CORRUPT_IF(tokenSize >= bufSize, "Token is too long.");
+
+    memcpy(bufPtr, tokenPtr, tokenSize);
+    bufPtr[tokenSize] = '\0';
+    CORRUPT_IF(!IsPrintable(bufPtr, NULL), "Invalid token.");
+
+    tokenPtr += tokenSize + 1;
+}
+
+
+/*--------------------------------------------------------------------------------------------------
+*
+* Read an item's data.
+*
+*-------------------------------------------------------------------------------------------------*/
+static void ReadItem
+(
+    const char *pathPtr,                ///< [IN] Item file path.
+    const char* masterPwdPtr,           ///< [IN] Master password.
+    char *usernamePtr,                  ///< [OUT] Username.
+    char *pwdPtr,                       ///< [OUT] Password.
+    char *otherInfoPtr                  ///< [OUT] Password.
+)
+{
+    // Read the salt, tag and ciphertext from the file.
+    uint8_t salt[SALT_SIZE];
+    uint8_t tag[TAG_SIZE];
+    uint8_t ct[ITEM_SIZE];
+
+    int fd = OpenFile(pathPtr);
+    CORRUPT_IF(fd < 0, "Could not open file.  %m.");
+
+    INTERNAL_ERR_IF(lseek(fd, NONCE_SIZE + TAG_SIZE + MAX_ITEM_NAME_SIZE, SEEK_CUR) == -1,
+                    "Could not seek file.  %m.");
+
+    CORRUPT_IF(!ReadExactBuf(fd, salt, sizeof(salt)), "Could not read salt.");
+    CORRUPT_IF(!ReadExactBuf(fd, tag, sizeof(tag)), "Could not read tag.");
+    CORRUPT_IF(!ReadExactBuf(fd, ct, sizeof(ct)), "Could not read ciphertext.");
+
+    close(fd);
+
+    // Derive the encryption key.
+    char *itemDataPtr = GetSensitiveBuf(ITEM_SIZE);
+    uint8_t *encKeyPtr = GetSensitiveBuf(KEY_SIZE);
+
+    CORRUPT_IF(!DeriveKey(masterPwdPtr, salt, sizeof(salt), DATA_ENC_KEYS, encKeyPtr, KEY_SIZE),
+               "Could not derive encryption key.");
+
+    // Decrypt the ciphertext.
+    CORRUPT_IF(!Decrypt(encKeyPtr, FixedNonce, ct, (uint8_t*)itemDataPtr, sizeof(ct), tag),
+               "Item data is corrupted and cannot be read.");
+    ReleaseSensitiveBuf(encKeyPtr);
+
+    // Read the item name.
+    GetToken(itemDataPtr, false, usernamePtr, MAX_USERNAME_SIZE);
+    GetToken(NULL, false, pwdPtr, MAX_PASSWORD_SIZE);
+    GetToken(NULL, true, otherInfoPtr, MAX_OTHER_INFO_SIZE);
+
+    ReleaseSensitiveBuf(itemDataPtr);
+}
+
+
+/*--------------------------------------------------------------------------------------------------
+*
+* Show summary of item data.
+*
+*-------------------------------------------------------------------------------------------------*/
+static void ShowSummary
+(
+    const char *itemNamePtr,            ///< [IN] Item name.
+    const char *usernamePtr,            ///< [IN] Username.
+    const char *pwdPtr,                 ///< [IN] Password.
+    const char *otherInfoPtr            ///< [IN] Other info.
+)
+{
+    // See if the user would like to see the password.
+    PRINT("Do you want to see the password [y/N]?");
+    bool showPassword = GetYesNo(false);
+
+    PRINT("OK, here is what we have.\n");
+    PRINT("Item: '%s'", itemNamePtr);
+    PRINT("Username: '%s'", usernamePtr);
+
+    if (showPassword)
+    {
+        PRINT("Password: '%s'", pwdPtr);
+    }
+    else
+    {
+        PRINT("Password: *****");
+    }
+
+    PRINT("Other info: '%s'\n", otherInfoPtr);
+}
+
+
+/*--------------------------------------------------------------------------------------------------
+*
+* Encrypt item data.  Item data will always be padded out to ITEM_SIZE before encryption so the
+* ciphertext is always ITEM_SIZE.
+*
+*-------------------------------------------------------------------------------------------------*/
+static void EncryptItem
+(
+    const uint8_t *encKeyPtr,           ///< [IN] Encryption key.  Assumed to be KEY_SIZE.
+    const char *usernamePtr,            ///< [IN] Username.
+    const char *pwdPtr,                 ///< [IN] Password.
+    const char *otherInfoPtr,           ///< [IN] Other info.
+    uint8_t *ctPtr,                     ///< [OUT] Ciphertext.  Assumed to be ITEM_SIZE.
+    uint8_t *tagPtr                     ///< [OUT] Tag.  Assumed to be TAG_SIZE.
+)
+{
+    char *itemDataPtr = GetSensitiveBuf(ITEM_SIZE);
+    memset(itemDataPtr, '\0', ITEM_SIZE);
+
+    size_t itemDataLen = snprintf(itemDataPtr, ITEM_SIZE, "%s\n%s\n%s",
+                                  usernamePtr, pwdPtr, otherInfoPtr);
+    INTERNAL_ERR_IF(itemDataLen >= ITEM_SIZE, "Item data too large.");
+
+    INTERNAL_ERR_IF(!Encrypt(encKeyPtr, FixedNonce, (uint8_t*)itemDataPtr, ctPtr, ITEM_SIZE, tagPtr),
+                    "Could not encrypt data.");
+
+    ReleaseSensitiveBuf(itemDataPtr);
+}
+
+
+/*--------------------------------------------------------------------------------------------------
+*
+* Encrypt name.  Name will always be padded out to MAX_ITEM_NAME_SIZE before encryption so the
+* ciphertext is always MAX_ITEM_NAME_SIZE.
+*
+*-------------------------------------------------------------------------------------------------*/
+static void EncryptName
+(
+    const uint8_t *encKeyPtr,           ///< [IN] Encryption key.  Assumed to be KEY_SIZE.
+    const uint8_t *nonceptr,            ///< [IN] Random nonce.
+    const char *itemNamePtr,            ///< [IN] Item name.
+    uint8_t *ctPtr,                     ///< [OUT] Ciphertext.  Assumed to be MAX_ITEM_NAME_SIZE.
+    uint8_t *tagPtr                     ///< [OUT] Tag.  Assumed to be TAG_SIZE.
+)
+{
+    char *namePtr = GetSensitiveBuf(MAX_ITEM_NAME_SIZE);
+    memset(namePtr, '\0', MAX_ITEM_NAME_SIZE);
+
+    size_t len = snprintf(namePtr, MAX_ITEM_NAME_SIZE, "%s", itemNamePtr);
+    INTERNAL_ERR_IF(len >= MAX_ITEM_NAME_SIZE, "Name too long.");
+
+    INTERNAL_ERR_IF(!Encrypt(encKeyPtr, nonceptr, (uint8_t*)namePtr, ctPtr, MAX_ITEM_NAME_SIZE,
+                             tagPtr),
+                    "Could not encrypt data.");
+
+    ReleaseSensitiveBuf(namePtr);
+}
+
+
+/*--------------------------------------------------------------------------------------------------
+*
+* Check if the item name is valid.
+*
+* @return
+*       true if valid.
+*       false otherwise.
+*
+*-------------------------------------------------------------------------------------------------*/
+static bool IsItemNameValid
+(
+    const char* itemNamePtr
+)
+{
+    size_t itemNameLen;
+
+    if (!IsPrintable(itemNamePtr, &itemNameLen))
+    {
+        return false;
+    }
+
+    if ( (itemNameLen <= 0) || (itemNameLen > MAX_ITEM_NAME_SIZE) )
+    {
+        return false;
+    }
+
+    return true;
+}
+
+
+/*--------------------------------------------------------------------------------------------------
+*
+* Get username from the user.
+*
+*-------------------------------------------------------------------------------------------------*/
+static void GetNewUsername
+(
+    char* bufPtr,
+    size_t bufSize
+)
+{
+    PRINT("Please enter the username for this item:");
+    GetLine(bufPtr, bufSize);
+    HALT_IF(!IsPrintable(bufPtr, NULL), "Username is invalid.");
+}
+
+
+/*--------------------------------------------------------------------------------------------------
+*
+* Get password from the user.
+*
+*-------------------------------------------------------------------------------------------------*/
+static void GetNewPassword
+(
+    char* bufPtr,
+    size_t bufSize
+)
+{
+    PRINT("Would you like to generate the password [Y/n]?");
+    if (GetYesNo(true))
+    {
+        GeneratePassword(bufPtr, bufSize);
+    }
+    else
+    {
+        PRINT("OK, please enter the password you want to use:");
+        GetPassword(bufPtr, bufSize);
+    }
+}
+
+
+/*--------------------------------------------------------------------------------------------------
+*
+* Get other info from the user.
+*
+*-------------------------------------------------------------------------------------------------*/
+static void GetNewOtherInfo
+(
+    char* bufPtr,
+    size_t bufSize
+)
+{
+    PRINT("Enter other info:");
+    GetLine(bufPtr, bufSize);
+    HALT_IF(!IsPrintable(bufPtr, NULL), "Info contains invalid characters.");
+}
+
+
+/*--------------------------------------------------------------------------------------------------
+*
+* Write item file.
+*
+*-------------------------------------------------------------------------------------------------*/
+static void WriteItemFile
+(
+    int fd,                             ///< [IN] File descriptor to write to.
+    const uint8_t *nameNoncePtr,        ///< [IN] Name nonce.  Assumed to be NONCE_SIZE.
+    const uint8_t *nameTagPtr,          ///< [IN] Name tag.  Assumed to be TAG_SIZE.
+    const uint8_t *nameCtPtr,           ///< [IN] Name ciphertext. Assumed to be MAX_ITEM_NAME_SIZE.
+    const uint8_t *saltPtr,             ///< [IN] Salt. Assumed to be SALT_SIZE.
+    const uint8_t *tagPtr,              ///< [IN] Tag.  Assumed to be TAG_SIZE.
+    const uint8_t *itemCtPtr            ///< [IN] Item ciphertext.  Assumed to be ITEM_SIZE.
+)
+{
+    INTERNAL_ERR_IF(!WriteBuf(fd, nameNoncePtr, NONCE_SIZE), "Could not write name nonce.");
+    INTERNAL_ERR_IF(!WriteBuf(fd, nameTagPtr, TAG_SIZE), "Could not write name tag.");
+    INTERNAL_ERR_IF(!WriteBuf(fd, nameCtPtr, MAX_ITEM_NAME_SIZE), "Could not write name ciphertext.");
+    INTERNAL_ERR_IF(!WriteBuf(fd, saltPtr, SALT_SIZE), "Could not write salt.");
+    INTERNAL_ERR_IF(!WriteBuf(fd, tagPtr, TAG_SIZE), "Could not write tag.");
+    INTERNAL_ERR_IF(!WriteBuf(fd, itemCtPtr, ITEM_SIZE), "Could not write ciphertext.");
+}
+
+
+/*--------------------------------------------------------------------------------------------------
+*
 * Write system file.
 *
 *-------------------------------------------------------------------------------------------------*/
@@ -405,6 +751,36 @@ static void GetItem
     const char *itemNamePtr
 )
 {
+    char *pathPtr = GetSensitiveBuf(PATH_MAX);
+    char *masterPwdPtr = GetSensitiveBuf(MAX_PASSWORD_SIZE);
+    char *usernamePtr = GetSensitiveBuf(MAX_USERNAME_SIZE);
+    char *pwdPtr = GetSensitiveBuf(MAX_PASSWORD_SIZE);
+    char *otherInfoPtr = GetSensitiveBuf(MAX_OTHER_INFO_SIZE);
+
+    // Check item name.
+    HALT_IF(!IsItemNameValid(itemNamePtr), "Item name is invalid.");
+
+    // Check if the system has been initialized.
+    HALT_IF(!DoesFileExist(SystemPath), "The system has not been initialized.");
+
+    // Get the master password.
+    uint8_t fileSalt[SALT_SIZE];
+    CheckMasterPwd(masterPwdPtr, fileSalt, NULL);
+
+    // Check if the item exist.
+    GetItemPath(itemNamePtr, masterPwdPtr, fileSalt, pathPtr);
+    HALT_IF(!DoesFileExist(pathPtr), "Item doesn't exist.");
+
+    // Read item data.
+    ReadItem(pathPtr, masterPwdPtr, usernamePtr, pwdPtr, otherInfoPtr);
+    ReleaseSensitiveBuf(masterPwdPtr);
+    ReleaseSensitiveBuf(pathPtr);
+
+    // Show summary.
+    ShowSummary(itemNamePtr, usernamePtr, pwdPtr, otherInfoPtr);
+    ReleaseSensitiveBuf(usernamePtr);
+    ReleaseSensitiveBuf(otherInfoPtr);
+    ReleaseSensitiveBuf(pwdPtr);
 }
 
 
@@ -418,6 +794,79 @@ static void CreateNewItem
     const char *itemNamePtr
 )
 {
+    char *pathPtr = GetSensitiveBuf(PATH_MAX);
+    char *masterPwdPtr = GetSensitiveBuf(MAX_PASSWORD_SIZE);
+    char *usernamePtr = GetSensitiveBuf(MAX_USERNAME_SIZE);
+    char *pwdPtr = GetSensitiveBuf(MAX_PASSWORD_SIZE);
+    char *otherInfoPtr = GetSensitiveBuf(MAX_OTHER_INFO_SIZE);
+    uint8_t* encKeyPtr = GetSensitiveBuf(KEY_SIZE);
+    uint8_t* nameEncKeyPtr = GetSensitiveBuf(KEY_SIZE);
+
+    // Check item name.
+    HALT_IF(!IsItemNameValid(itemNamePtr), "Item name is invalid.");
+
+    // Check if the system has been initialized.
+    HALT_IF(!DoesFileExist(SystemPath), "The system has not been initialized.");
+
+    // Get the master password and the system salts.
+    uint8_t fileSalt[SALT_SIZE];
+    uint8_t nameSalt[SALT_SIZE];
+    CheckMasterPwd(masterPwdPtr, fileSalt, nameSalt);
+
+    // Check if the item exist.
+    GetItemPath(itemNamePtr, masterPwdPtr, fileSalt, pathPtr);
+    HALT_IF(DoesFileExist(pathPtr), "Item already exists.");
+
+    // Derive the item encryption key.
+    uint8_t salt[SALT_SIZE];
+    GetRandom(salt, sizeof(salt));
+
+    INTERNAL_ERR_IF(!DeriveKey(masterPwdPtr, salt, sizeof(salt), DATA_ENC_KEYS, encKeyPtr, KEY_SIZE),
+                    "Could not get encryption key.");
+
+    // Derive the name encryption key.
+    INTERNAL_ERR_IF(!DeriveKey(masterPwdPtr, nameSalt, sizeof(nameSalt),
+                               NAME_ENC_KEYS, nameEncKeyPtr, KEY_SIZE),
+                    "Could not get encryption key.");
+
+    ReleaseSensitiveBuf(masterPwdPtr);
+
+    // Get data.
+    GetNewUsername(usernamePtr, MAX_USERNAME_SIZE);
+    GetNewPassword(pwdPtr, MAX_PASSWORD_SIZE);
+    GetNewOtherInfo(otherInfoPtr, MAX_OTHER_INFO_SIZE);
+
+    // Encrypt the data.
+    uint8_t ct[ITEM_SIZE];
+    uint8_t tag[TAG_SIZE];
+    EncryptItem(encKeyPtr, usernamePtr, pwdPtr, otherInfoPtr, ct, tag);
+    ReleaseSensitiveBuf(encKeyPtr);
+
+    // Encrypt the item name.
+    uint8_t nameCt[MAX_ITEM_NAME_SIZE];
+    uint8_t nameTag[TAG_SIZE];
+    uint8_t nonce[NONCE_SIZE];
+    GetRandom(nonce, sizeof(nonce));
+    EncryptName(nameEncKeyPtr, nonce, itemNamePtr, nameCt, nameTag);
+    ReleaseSensitiveBuf(nameEncKeyPtr);
+
+    // Show summary.
+    ShowSummary(itemNamePtr, usernamePtr, pwdPtr, otherInfoPtr);
+    ReleaseSensitiveBuf(usernamePtr);
+    ReleaseSensitiveBuf(otherInfoPtr);
+
+    // Save item.
+    PRINT("Do you want to save the item [Y/n]?");
+    if (GetYesNo(true))
+    {
+        int fd = CreateFile(pathPtr);
+        INTERNAL_ERR_IF(fd < 0, "Could not create file.  %m.");
+        WriteItemFile(fd, nonce, nameTag, nameCt, salt, tag, ct);
+        close(fd);
+
+        PRINT("Saved.");
+    }
+    ReleaseSensitiveBuf(pathPtr);
 }
 
 
