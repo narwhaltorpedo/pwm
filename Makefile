@@ -22,7 +22,7 @@ SRC_FILES := $(wildcard ./*.c) \
 			 $(CHA_CHA_SRC)/misc/zeromem.c
 INCLUDES := -I . -I $(ARGON_SRC)/include -I $(ARGON_SRC)/src -I $(ARGON_SRC)/src/blake2 \
             -I $(CHA_CHA_SRC)/headers
-LIBRARIES := -lpthread
+LIBRARIES := -lpthread -lX11
 BUILD_DIR := $(CURDIR)/build
 EXE_FILE := pwm
 

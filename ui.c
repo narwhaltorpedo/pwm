@@ -5,9 +5,199 @@
 
 #include <termios.h>
 #include <unistd.h>
+#include <poll.h>
+#include <X11/Xlib.h>
+#include <X11/Xatom.h>
 #include "pwm.h"
 #include "ui.h"
 #include "password.h"
+
+/*--------------------------------------------------------------------------------------------------
+*
+* X11 parameters.
+*
+*-------------------------------------------------------------------------------------------------*/
+static Display *DisplayPtr = NULL;
+static Atom Clipboard;
+
+
+/*--------------------------------------------------------------------------------------------------
+*
+* Send to deny request to X11 clients asking for our clipboard data.
+*
+*-------------------------------------------------------------------------------------------------*/
+static void SendDeny
+(
+    Display *displayPtr,
+    XSelectionRequestEvent *selReqPtr
+)
+{
+    XSelectionEvent selEvent;
+
+    selEvent.type = SelectionNotify;
+    selEvent.requestor = selReqPtr->requestor;
+    selEvent.selection = selReqPtr->selection;
+    selEvent.target = selReqPtr->target;
+    selEvent.property = None;
+    selEvent.time = selReqPtr->time;
+
+    XSendEvent(displayPtr, selReqPtr->requestor, True, NoEventMask, (XEvent *)&selEvent);
+}
+
+
+/*--------------------------------------------------------------------------------------------------
+*
+* Send possible target list to requesting client.
+*
+*-------------------------------------------------------------------------------------------------*/
+static void SendTargets
+(
+    Display *displayPtr,
+    XSelectionRequestEvent *selReqPtr,
+    Atom utf8
+)
+{
+    Atom targetList[] = {utf8};
+    XSelectionEvent selEvent;
+
+    XChangeProperty(displayPtr, selReqPtr->requestor, selReqPtr->property, XA_ATOM, 32,
+                    PropModeReplace, (const unsigned char *)targetList, 1);
+
+    selEvent.type = SelectionNotify;
+    selEvent.requestor = selReqPtr->requestor;
+    selEvent.selection = selReqPtr->selection;
+    selEvent.target = selReqPtr->target;
+    selEvent.property = selReqPtr->property;
+    selEvent.time = selReqPtr->time;
+
+    XSendEvent(displayPtr, selReqPtr->requestor, True, NoEventMask, (XEvent *)&selEvent);
+}
+
+
+/*--------------------------------------------------------------------------------------------------
+*
+* Send string to requesting client.
+*
+*-------------------------------------------------------------------------------------------------*/
+static void SendUtf8
+(
+    Display *displayPtr,
+    XSelectionRequestEvent *selReqPtr,
+    Atom utf8,
+    const char *strPtr
+)
+{
+    XSelectionEvent selEvent;
+
+    XChangeProperty(displayPtr, selReqPtr->requestor, selReqPtr->property, utf8, 8, PropModeReplace,
+                    (const unsigned char *)strPtr, strlen(strPtr));
+
+    selEvent.type = SelectionNotify;
+    selEvent.requestor = selReqPtr->requestor;
+    selEvent.selection = selReqPtr->selection;
+    selEvent.target = selReqPtr->target;
+    selEvent.property = selReqPtr->property;
+    selEvent.time = selReqPtr->time;
+
+    XSendEvent(displayPtr, selReqPtr->requestor, True, NoEventMask, (XEvent *)&selEvent);
+}
+
+
+/*--------------------------------------------------------------------------------------------------
+*
+* Start sharing text with clipboard.  This function will block until there is activity on STDIN.
+* Once this function returns the text will no longer be available to the clipboard.
+*
+*-------------------------------------------------------------------------------------------------*/
+static void ShareWithClipboard
+(
+    const char *textPtr                 ///< [IN] Text to copy.
+)
+{
+    DisplayPtr = XOpenDisplay(NULL);
+    INTERNAL_ERR_IF(DisplayPtr == NULL, "Could not open X display.");
+
+    int screen = DefaultScreen(DisplayPtr);
+    Window root = RootWindow(DisplayPtr, screen);
+
+    // Create a window to receive messages from clients.
+    Window owner = XCreateSimpleWindow(DisplayPtr, root, -10, -10, 1, 1, 0, 0, 0);
+
+    Clipboard = XInternAtom(DisplayPtr, "CLIPBOARD", False);
+    Atom utf8 = XInternAtom(DisplayPtr, "UTF8_STRING", False);
+    Atom getTargets = XInternAtom(DisplayPtr, "TARGETS", False);
+
+    // Claim ownership of the clipboard.
+    XSetSelectionOwner(DisplayPtr, Clipboard, owner, CurrentTime);
+
+    // Handle events.
+    int xFd = ConnectionNumber(DisplayPtr);
+
+    struct pollfd fdSet[2] = { {.fd = xFd, .events = POLLOUT},
+                               {.fd = STDIN_FILENO, .events = POLLIN} };
+
+    while (1)
+    {
+        int numReadyFds = poll(fdSet, 2, -1);
+
+        INTERNAL_ERR_IF(numReadyFds == -1, "Poll failed.  %m.");
+
+        if (fdSet[1].revents != 0)
+        {
+            // Something available on stdin.
+            break;
+        }
+
+        if (fdSet[0].revents & POLLOUT)
+        {
+            // X11 events.
+            while (XPending(DisplayPtr) > 0)
+            {
+                char *reqNamePtr = NULL;
+                XSelectionRequestEvent *selReqPtr;
+                XEvent event;
+                XNextEvent(DisplayPtr, &event);
+
+                switch (event.type)
+                {
+                    case SelectionClear:
+                        goto cleanup;
+
+                    case SelectionRequest:
+                        selReqPtr = (XSelectionRequestEvent*)&event.xselectionrequest;
+
+                        XFetchName(DisplayPtr, selReqPtr->requestor, &reqNamePtr);
+
+                        if (selReqPtr->target == getTargets)
+                        {
+                            SendTargets(DisplayPtr, selReqPtr, utf8);
+                        }
+                        else if ( (selReqPtr->target != utf8) ||
+                                  (selReqPtr->property == None) ||
+                                  (reqNamePtr == NULL) )
+                        {
+                            SendDeny(DisplayPtr, selReqPtr);
+                        }
+                        else
+                        {
+                            // Only send data to windows with names.
+                            SendUtf8(DisplayPtr, selReqPtr, utf8, textPtr);
+                        }
+                        break;
+                }
+            }
+        }
+        else if (fdSet[0].revents != 0)
+        {
+            goto cleanup;
+        }
+
+    }
+
+cleanup:
+
+    ClearClipboard();
+}
 
 
 /*--------------------------------------------------------------------------------------------------
@@ -207,4 +397,52 @@ void GetPassword
     }
 
     TurnEchoOn(true);
+}
+
+
+/*--------------------------------------------------------------------------------------------------
+*
+* See if the user wants to share the password with the clipboard.  This function will block until
+* there is activity on STDIN.  Once this function returns the text will no longer be available to
+* the clipboard.
+*
+*-------------------------------------------------------------------------------------------------*/
+void SharePasswordWithClipboard
+(
+    const char *pwdPtr                  ///< [IN] Text to copy.
+)
+{
+    PRINT("Do you want the password available in the clipboard [Y/n]?");
+    if (GetYesNo(true))
+    {
+        PRINT("OK hit any key when you are done with the password.");
+
+        ShareWithClipboard(pwdPtr);
+
+        // Flush everything up to the next newline.
+        int c;
+        do
+        {
+            c = getchar();
+        }
+        while ( (c != '\n') && (c != EOF) );
+    }
+}
+
+
+/*--------------------------------------------------------------------------------------------------
+*
+* Clear the clipboard.
+*
+*-------------------------------------------------------------------------------------------------*/
+void ClearClipboard
+(
+    void
+)
+{
+    if (DisplayPtr != NULL)
+    {
+        XCloseDisplay(DisplayPtr);
+        DisplayPtr = NULL;
+    }
 }

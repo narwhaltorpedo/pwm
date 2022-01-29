@@ -74,4 +74,28 @@ void GetPassword
 );
 
 
+/*--------------------------------------------------------------------------------------------------
+*
+* See if the user wants to share the password with the clipboard.  This function will block until
+* there is activity on STDIN.  Once this function returns the text will no longer be available to
+* the clipboard.
+*
+*-------------------------------------------------------------------------------------------------*/
+void SharePasswordWithClipboard
+(
+    const char *pwdPtr                  ///< [IN] Text to copy.
+);
+
+
+/*--------------------------------------------------------------------------------------------------
+*
+* Clear the clipboard.
+*
+*-------------------------------------------------------------------------------------------------*/
+void ClearClipboard
+(
+    void
+);
+
+
 #endif // PWM_USER_INTERFACE_INCLUDE_GUARD

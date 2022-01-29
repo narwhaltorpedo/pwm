@@ -242,6 +242,7 @@ static void Cleanup
 )
 {
     ZerorizeSensitiveBufs();
+    ClearClipboard();
     TurnEchoOn(true);
 }
 
@@ -1048,6 +1049,9 @@ static void GetItem
     ShowSummary(itemNamePtr, usernamePtr, pwdPtr, otherInfoPtr);
     ReleaseSensitiveBuf(usernamePtr);
     ReleaseSensitiveBuf(otherInfoPtr);
+
+    // Share password on clipboard.
+    SharePasswordWithClipboard(pwdPtr);
     ReleaseSensitiveBuf(pwdPtr);
 }
 
@@ -1122,6 +1126,10 @@ static void CreateNewItem
     ShowSummary(itemNamePtr, usernamePtr, pwdPtr, otherInfoPtr);
     ReleaseSensitiveBuf(usernamePtr);
     ReleaseSensitiveBuf(otherInfoPtr);
+
+    // Share password on clipboard.
+    SharePasswordWithClipboard(pwdPtr);
+    ReleaseSensitiveBuf(pwdPtr);
 
     // Save item.
     PRINT("Do you want to save the item [Y/n]?");
