@@ -1211,6 +1211,36 @@ static void DeleteItem
     const char *itemNamePtr
 )
 {
+    // Check item name.
+    HALT_IF(!IsItemNameValid(itemNamePtr), "Item name is invalid.");
+
+    // Check if the system has been initialized.
+    HALT_IF(!DoesFileExist(SystemPath), "The system has not been initialized.");
+
+    // Get the master password and the system salts.
+    char *masterPwdPtr = GetSensitiveBuf(MAX_PASSWORD_SIZE);
+    uint8_t fileSalt[SALT_SIZE];
+    CheckMasterPwd(masterPwdPtr, fileSalt, NULL);
+
+    // Check if the item exist.
+    char *pathPtr = GetSensitiveBuf(PATH_MAX);
+
+    GetItemPath(itemNamePtr, masterPwdPtr, fileSalt, pathPtr);
+    HALT_IF(!DoesFileExist(pathPtr), "Item doesn't exist.");
+    ReleaseSensitiveBuf(masterPwdPtr);
+
+    // Confirm delete.
+    PRINT("Are you sure you want to delete this item [y/N]?");
+    if (!GetYesNo(false))
+    {
+        return;
+    }
+
+    // Delete the file.
+    INTERNAL_ERR_IF(unlink(pathPtr) != 0, "Could not delete item.  %m.");
+    ReleaseSensitiveBuf(pathPtr);
+
+    PRINT("Item deleted.");
 }
 
 
