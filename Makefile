@@ -28,14 +28,26 @@ EXE_FILE := pwm
 
 # Setup the build.
 define setupBuild
+./updateVersion.py
 if [ ! -d $(BUILD_DIR) ]; then mkdir $(BUILD_DIR); fi
 endef
 
 # Build.
+.PHONY: test
+test: setTest build
+
+.PHONY: release
+release: build
+
+.PHONY: setTest
+setTest:
+	$(eval DEFINES := -DTEST)
+
 .PHONY: build
 build:
 	$(setupBuild)
-	-$(CC) $(SRC_FILES) $(STANDARD_CC_FLAGS) $(INCLUDES) $(LIBRARIES) -o $(BUILD_DIR)/$(EXE_FILE)
+	-$(CC) $(SRC_FILES) $(DEFINES) $(STANDARD_CC_FLAGS) $(INCLUDES) $(LIBRARIES) \
+	-o $(BUILD_DIR)/$(EXE_FILE)
 
 .PHONY: clean
 clean:

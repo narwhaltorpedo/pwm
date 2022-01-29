@@ -103,6 +103,7 @@
 #include "crypto.h"
 #include "file.h"
 #include "password.h"
+#include "version.h"
 
 
 /*--------------------------------------------------------------------------------------------------
@@ -195,7 +196,7 @@ static void PrintHelp
 )
 {
     printf(
-        "%1$s\n"
+        "%1$s version %2$u.%3$u.%4$u\n"
         "Securely creates/stores usernames and passwords for multiple items (such as a websites).\n"
         "\n"
         "   Usage:\n"
@@ -225,7 +226,7 @@ static void PrintHelp
         "\n"
         "       %1$s delete <itemName>\n"
         "               Deletes the item.\n",
-        Basename(utilNamePtr));
+        Basename(utilNamePtr), VER_MAJOR, VER_MINOR, VER_PATCH);
 
     exit(EXIT_FAILURE);
 }
@@ -287,6 +288,16 @@ static void CheckMasterPwd
     // Read the system file data first.
     int fd = OpenFile(SystemPath);
     CORRUPT_IF(fd == -1, "Could not open system file.");
+
+    // Check version.
+    uint8_t majorVer, minorVer, patchVer;
+
+    HALT_IF (!ReadExactBuf(fd, &majorVer, 1) ||
+             !ReadExactBuf(fd, &minorVer, 1) ||
+             !ReadExactBuf(fd, &patchVer, 1) ||
+             (majorVer != VER_MAJOR) ||
+             (minorVer != VER_MINOR),
+             "Unsupported file version.");
 
     // Read filename salt.
     if (fileSaltPtr == NULL)
@@ -466,6 +477,17 @@ static void ReadItem
     int fd = OpenFile(pathPtr);
     CORRUPT_IF(fd < 0, "Could not open file.  %m.");
 
+    uint8_t majorVer, minorVer, patchVer;
+
+    if (!ReadExactBuf(fd, &majorVer, 1) ||
+        !ReadExactBuf(fd, &minorVer, 1) ||
+        !ReadExactBuf(fd, &patchVer, 1) ||
+        (majorVer != VER_MAJOR) ||
+        (minorVer != VER_MINOR))
+    {
+        CORRUPT("File version %d.%d.%d unsupported.", majorVer, minorVer, patchVer);
+    }
+
     INTERNAL_ERR_IF(lseek(fd, NONCE_SIZE + TAG_SIZE + MAX_ITEM_NAME_SIZE, SEEK_CUR) == -1,
                     "Could not seek file.  %m.");
 
@@ -511,6 +533,17 @@ static void ReadItemEncryptedName
 {
     int fd = OpenFile(pathPtr);
     CORRUPT_IF(fd < 0, "Could not open file.  %m.");
+
+    uint8_t majorVer, minorVer, patchVer;
+
+    if (!ReadExactBuf(fd, &majorVer, 1) ||
+        !ReadExactBuf(fd, &minorVer, 1) ||
+        !ReadExactBuf(fd, &patchVer, 1) ||
+        (majorVer != VER_MAJOR) ||
+        (minorVer != VER_MINOR))
+    {
+        CORRUPT("File version %d.%d.%d unsupported.", majorVer, minorVer, patchVer);
+    }
 
     CORRUPT_IF(!ReadExactBuf(fd, noncePtr, NONCE_SIZE), "Could not read nonce.");
     CORRUPT_IF(!ReadExactBuf(fd, tagPtr, TAG_SIZE), "Could not read tag.");
@@ -716,6 +749,13 @@ static void WriteItemFile
     const uint8_t *itemCtPtr            ///< [IN] Item ciphertext.  Assumed to be ITEM_SIZE.
 )
 {
+    uint8_t verMajor = (uint8_t)VER_MAJOR;
+    uint8_t verMinor = (uint8_t)VER_MINOR;
+    uint8_t verPatch = (uint8_t)VER_PATCH;
+
+    INTERNAL_ERR_IF(!WriteBuf(fd, &verMajor, 1), "Could not write major version.");
+    INTERNAL_ERR_IF(!WriteBuf(fd, &verMinor, 1), "Could not write minor version.");
+    INTERNAL_ERR_IF(!WriteBuf(fd, &verPatch, 1), "Could not write patch version.");
     INTERNAL_ERR_IF(!WriteBuf(fd, nameNoncePtr, NONCE_SIZE), "Could not write name nonce.");
     INTERNAL_ERR_IF(!WriteBuf(fd, nameTagPtr, TAG_SIZE), "Could not write name tag.");
     INTERNAL_ERR_IF(!WriteBuf(fd, nameCtPtr, MAX_ITEM_NAME_SIZE), "Could not write name ciphertext.");
@@ -740,6 +780,13 @@ static void WriteSystemFile
     const uint8_t *cfgCtPtr             ///< [IN] Config ciphertext.  Assumed to be CONFIG_DATA_SIZE.
 )
 {
+    uint8_t verMajor = (uint8_t)VER_MAJOR;
+    uint8_t verMinor = (uint8_t)VER_MINOR;
+    uint8_t verPatch = (uint8_t)VER_PATCH;
+
+    INTERNAL_ERR_IF(!WriteBuf(fd, &verMajor, 1), "Could not write major version.");
+    INTERNAL_ERR_IF(!WriteBuf(fd, &verMinor, 1), "Could not write minor version.");
+    INTERNAL_ERR_IF(!WriteBuf(fd, &verPatch, 1), "Could not write patch version.");
     INTERNAL_ERR_IF(!WriteBuf(fd, fileSaltPtr, SALT_SIZE), "Could not write filename salt.");
     INTERNAL_ERR_IF(!WriteBuf(fd, nameSaltPtr, SALT_SIZE), "Could not write name salt.");
     INTERNAL_ERR_IF(!WriteBuf(fd, saltPtr, SALT_SIZE), "Could not write salt.");
@@ -1369,9 +1416,19 @@ int main(int argc, char* argv[])
     TurnEchoOn(true);
 
     // Create the known paths.
+#ifdef TEST
+    char curDir[PATH_MAX];
+    INTERNAL_ERR_IF(getcwd(curDir, sizeof(curDir)) == NULL,
+                    "Could not get current working directory.  %m.");
+
+    INTERNAL_ERR_IF(snprintf(StoragePath, sizeof(StoragePath),
+                             "%s/%s", curDir, STORAGE_DIR) >= sizeof(StoragePath),
+                    "Storage directory path too long.");
+#else
     INTERNAL_ERR_IF(snprintf(StoragePath, sizeof(StoragePath),
                              "%s/%s", getenv("HOME"), STORAGE_DIR) >= sizeof(StoragePath),
                     "Storage directory path too long.");
+#endif
 
     INTERNAL_ERR_IF(snprintf(SystemPath, sizeof(SystemPath),
                              "%s/%s", StoragePath, SYSTEM_FILE_NAME) >= sizeof(SystemPath),
