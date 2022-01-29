@@ -25,7 +25,7 @@ SensitiveBuf_t;
 * Keep an array of sensitive buffers.
 *
 *-------------------------------------------------------------------------------------------------*/
-#define NUM_SENSITIVE_BUFS              (100)
+#define NUM_SENSITIVE_BUFS              (MAX_NUM_ITEMS + 10)
 static SensitiveBuf_t SensitiveBufs[NUM_SENSITIVE_BUFS] = {{0, NULL}};
 
 

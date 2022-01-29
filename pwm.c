@@ -749,6 +749,21 @@ static void WriteSystemFile
 
 /*--------------------------------------------------------------------------------------------------
 *
+* Compare two strings in a function that can be passed to qsort.
+*
+*-------------------------------------------------------------------------------------------------*/
+static int CompareStr
+(
+    void const *first,
+    void const *second
+)
+{
+    return strcmp(*(const char **)first, *(const char **)second);
+}
+
+
+/*--------------------------------------------------------------------------------------------------
+*
 * Initialize the system.
 *
 * Creates the storage directory and the encrypted system file.
@@ -862,6 +877,66 @@ static void List
     void
 )
 {
+    // Check if the system has been initialized.
+    HALT_IF(!DoesFileExist(SystemPath), "The system has not been initialized.");
+
+    // Get the master password and the name encryption salt.
+    char *masterPwdPtr = GetSensitiveBuf(MAX_PASSWORD_SIZE);
+    uint8_t nameSalt[SALT_SIZE];
+    CheckMasterPwd(masterPwdPtr, NULL, nameSalt);
+
+    // Derive the name encryption key.
+    uint8_t* encKeyPtr = GetSensitiveBuf(KEY_SIZE);
+    INTERNAL_ERR_IF(!DeriveKey(masterPwdPtr, nameSalt, sizeof(nameSalt),
+                               NAME_ENC_KEYS, encKeyPtr, KEY_SIZE),
+                    "Could not get encryption key.");
+    ReleaseSensitiveBuf(masterPwdPtr);
+
+    PRINT("\n");
+
+    // Create an array of names.
+    size_t numNames = 0;
+    char *nameArray[MAX_NUM_ITEMS];
+
+    // Build the list of names.
+    char* pathArrayPtr[] = {StoragePath, NULL};
+    FTS* ftsPtr = fts_open(pathArrayPtr, FTS_PHYSICAL | FTS_NOSTAT, NULL);
+    INTERNAL_ERR_IF(ftsPtr == NULL, "Could not open dir iterator.  %m.");
+
+    FTSENT* entPtr;
+    while ( ((entPtr = fts_read(ftsPtr)) != NULL) && (numNames < MAX_NUM_ITEMS) )
+    {
+        if ( (entPtr->fts_info == FTS_NSOK) &&
+             (strcmp(entPtr->fts_path, SystemPath) != 0) )
+        {
+            uint8_t nonce[NONCE_SIZE];
+            uint8_t tag[TAG_SIZE];
+            uint8_t encName[MAX_ITEM_NAME_SIZE];
+            ReadItemEncryptedName(entPtr->fts_path, nonce, tag, encName);
+
+            nameArray[numNames] = GetSensitiveBuf(MAX_ITEM_NAME_SIZE);
+
+            Decrypt(encKeyPtr, nonce, encName, (uint8_t*)nameArray[numNames],
+                    MAX_ITEM_NAME_SIZE, tag);
+
+            numNames++;
+        }
+    }
+
+    fts_close(ftsPtr);
+
+    // Sort the list.
+    qsort(nameArray, numNames, sizeof(char *), CompareStr);
+
+    // Print the list and release the buffers at the same time.
+    size_t i;
+    for (i = 0; i < numNames; i++)
+    {
+        PRINT("%s", nameArray[i]);
+        ReleaseSensitiveBuf(nameArray[i]);
+    }
+
+    ReleaseSensitiveBuf(encKeyPtr);
 }
 
 
