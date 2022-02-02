@@ -13,33 +13,33 @@ directory.  The item filenames are derived as described below.
 In addition to the item files a system file is also stored under the storage directory.  The
 system file is created when the system is first initialized.  Unlike the item files the system file
 is created with a fixed name.  The system contains the following information:
-__________________________________________________________
+\__________________________________________________________
 | version | fileSalt | nameSalt | salt | tag | ciphertext |
-----------------------------------------------------------
+\----------------------------------------------------------
 
 The ciphertext is the encrypted configuration data.  The tag is the authentication for the
 ciphertext.  The salt is used to derive the encryption key to encrypt the configuration data as
 follows:
-     ConfigEncryptionKey = KDF(masterPassword, salt, dataEncryptionLabel)
+     ConfigEncryptionKey = KDF(masterPassword, salt, DATA_ENCRYPTION_LABEL)
 
 The nameSalt is used to derive item filenames:
-     itemFileName = KDF(masterPassword, nameSalt, itemName | filenameLabel)
+     itemFileName = KDF(masterPassword, nameSalt, itemName || FILENAME_LABEL)
 
 The fileSalt is used to derive an item name encryption key:
-     ItemNameEncryptionKey = KDF(masterPassword, fileSalt, filenameEncryptionLabel)
+     ItemNameEncryptionKey = KDF(masterPassword, fileSalt, FILENAME_ENCRYPTION_LABEL)
 
 The labels in the KDF functions are fixed strings.
 
 ## Item Files
 The item files contain the following information:
-________________________________________________________________________________
+\________________________________________________________________________________
 | version |  nameNonce | nameTag | nameCiphertext | salt | tag | itemCiphertext |
---------------------------------------------------------------------------------
+\--------------------------------------------------------------------------------
 
 The itemCiphertext is the encrypted username, password and other info for the item.  The tag is the
 authentication tag for the itemCiphertext.  The salt is used to derive the encryption key for the
 itemCiphertext as follows:
-     ItemEncryptionKey = KDF(masterPassword, salt, dataEncryptionLabel)
+     ItemEncryptionKey = KDF(masterPassword, salt, DATA_ENCRYPTION_LABEL)
 
 The nameCiphertext is the encrypted item name.  The nameTag is the authentication tag for the
 nameCiphertext.  The nameNonce is the nonce when encrypting item name as follows:
@@ -86,3 +86,16 @@ To help with zeroization of sensitive data we create a sensitive memory allocato
 automatically zerorizes the memory before freeing it.  To make this more robust we create a
 termination action and a signal handler that zerorizes and frees all sensitive buffers in case of
 a process termination.  This isn't fool proof because a SIGKILL signal can't be caught.
+
+## Building PWM
+For development, run:
+'make'
+
+To build a test version of the utility.  The resulting utility will be located under a the 'build'
+directory.  The test version will locate its storage directory under the current directory.
+
+To build the release version run:
+'make release'
+
+This will build the utility using the latest tag description as the version number.  The storage
+directory will be located in the user's home directory.
