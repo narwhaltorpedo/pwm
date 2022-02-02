@@ -28,16 +28,18 @@ EXE_FILE := pwm
 
 # Setup the build.
 define setupBuild
-./updateVersion.py
 if [ ! -d $(BUILD_DIR) ]; then mkdir $(BUILD_DIR); fi
 endef
 
-# Build.
 .PHONY: test
 test: setTest build
 
 .PHONY: release
-release: build
+release: updateVersion build
+
+.PHONY: updateVersion
+updateVersion:
+	./updateVersion.py
 
 .PHONY: setTest
 setTest:
