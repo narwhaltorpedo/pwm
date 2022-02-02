@@ -13,9 +13,8 @@ directory.  The item filenames are derived as described below.
 In addition to the item files a system file is also stored under the storage directory.  The
 system file is created when the system is first initialized.  Unlike the item files the system file
 is created with a fixed name.  The system contains the following information:
-\__________________________________________________________
-| version | fileSalt | nameSalt | salt | tag | ciphertext |
-\----------------------------------------------------------
+
+|**version** | **fileSalt** | **nameSalt** | **salt** | **tag** | **ciphertext** |
 
 The ciphertext is the encrypted configuration data.  The tag is the authentication for the
 ciphertext.  The salt is used to derive the encryption key to encrypt the configuration data as
@@ -32,9 +31,8 @@ The labels in the KDF functions are fixed strings.
 
 ## Item Files
 The item files contain the following information:
-\________________________________________________________________________________
-| version |  nameNonce | nameTag | nameCiphertext | salt | tag | itemCiphertext |
-\--------------------------------------------------------------------------------
+
+| **version** | **nameNonce** | **nameTag** | **nameCiphertext** | **salt** | **tag** | **itemCiphertext** |
 
 The itemCiphertext is the encrypted username, password and other info for the item.  The tag is the
 authentication tag for the itemCiphertext.  The salt is used to derive the encryption key for the
@@ -86,6 +84,15 @@ To help with zeroization of sensitive data we create a sensitive memory allocato
 automatically zerorizes the memory before freeing it.  To make this more robust we create a
 termination action and a signal handler that zerorizes and frees all sensitive buffers in case of
 a process termination.  This isn't fool proof because a SIGKILL signal can't be caught.
+
+The X11 clipboard is used to make the item password available for the user to paste to other
+applications.  In X11 there is no global clipboard where data is copied to, rather an application
+advertises that it has something to share on the clipboard and when another application pastes it
+the data is copied directly from the first application to the second application.  When the
+application stops sharing its data to the clipboard the data is then no longer available.  This
+results in a quirk where when an application that has 'copied' something to the clipboard shutsdown
+the data is also gone from the clipboard.  This utility makes use of this quirk to ensure that
+passwords on the clipboard are gone when the utility shutsdown.
 
 ## Building PWM
 For development, run:
