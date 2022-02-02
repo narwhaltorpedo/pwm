@@ -14,7 +14,7 @@ In addition to the item files a system file is also stored under the storage dir
 system file is created when the system is first initialized.  Unlike the item files the system file
 is created with a fixed name.  The system contains the following information:
 
-|**version** | **fileSalt** | **nameSalt** | **salt** | **tag** | **ciphertext** |
+| **version** | **fileSalt** | **nameSalt** | **salt** | **tag** | **ciphertext** |
 
 The ciphertext is the encrypted configuration data.  The tag is the authentication for the
 ciphertext.  The salt is used to derive the encryption key to encrypt the configuration data as
@@ -96,13 +96,17 @@ passwords on the clipboard are gone when the utility shutsdown.
 
 ## Building PWM
 For development, run:
-'make'
+`make`
 
-To build a test version of the utility.  The resulting utility will be located under a the 'build'
+To build a test version of the utility.  The resulting utility will be located under a the `build`
 directory.  The test version will locate its storage directory under the current directory.
 
 To build the release version run:
-'make release'
+`make release`
 
 This will build the utility using the latest tag description as the version number.  The storage
 directory will be located in the user's home directory.
+
+The cryptographic code are pulled as submodules from the libtomcrypt and phc-winner-argon2 projects
+but built directly from source as part of this project.  This is done to reduce code size and avoid
+dynamic linking.
