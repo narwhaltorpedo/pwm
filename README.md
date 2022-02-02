@@ -85,4 +85,4 @@ invocation so maybe in the future Xchacha20poly1305 would be a better choice.
 To help with zeroization of sensitive data we create a sensitive memory allocator that
 automatically zerorizes the memory before freeing it.  To make this more robust we create a
 termination action and a signal handler that zerorizes and frees all sensitive buffers in case of
-a process termination.
+a process termination.  This isn't fool proof because a SIGKILL signal can't be caught.
